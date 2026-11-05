@@ -33,11 +33,15 @@ const io = new Server(server, {
 app.use(express.json());
 
 // Render / uptime health check (keep-alive friendly)
+const APP_VERSION = '1.2.0-reconnect';
+
 app.get('/health', (_req, res) => {
   res.status(200).json({
     ok: true,
+    version: APP_VERSION,
     uptime: process.uptime(),
-    connection: getConnectionStatus().state
+    connection: getConnectionStatus().state,
+    username: getConnectionStatus().username || null
   });
 });
 
@@ -115,20 +119,21 @@ app.post('/api/connect', async (req, res) => {
   config.tiktokUsername = String(username).replace(/^@/, '').trim();
   saveConfig(config);
   try {
-    await connectTikTok(config.tiktokUsername);
+    await ensureWatching(config.tiktokUsername);
     res.json({ ok: true, connection: getConnectionStatus() });
   } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err && err.message ? err.message : String(err),
-      connection: getConnectionStatus()
+    // Offline / retrying is normal — still return current status
+    res.json({
+      ok: true,
+      connection: getConnectionStatus(),
+      note: err && err.message ? err.message : String(err)
     });
   }
 });
 
 app.post('/api/disconnect', async (_req, res) => {
   try {
-    await disconnectTikTok();
+    await stopWatching();
     res.json({ ok: true, connection: getConnectionStatus() });
   } catch (err) {
     res.status(500).json({
@@ -330,7 +335,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Player/control can ask the server to connect using ?user=
+  // Player/control can ask the server to watch a username (?user=)
   socket.on('connect_tiktok', async (payload, ack) => {
     const username = String((payload && payload.username) || '')
       .replace(/^@/, '')
@@ -340,42 +345,40 @@ io.on('connection', (socket) => {
       return;
     }
     config.tiktokUsername = username;
+    saveConfig(config);
     try {
-      saveConfig(config);
-    } catch (_e) {
-      /* Render disk may be ephemeral — ignore */
-    }
-    try {
-      // Avoid reconnect spam if already on same user
-      if (
-        tiktokStatus.state === 'connected' &&
-        tiktokStatus.username === username
-      ) {
-        if (typeof ack === 'function') ack({ ok: true, connection: getConnectionStatus() });
-        return;
-      }
-      await connectTikTok(username);
+      await ensureWatching(username);
       if (typeof ack === 'function') ack({ ok: true, connection: getConnectionStatus() });
     } catch (err) {
       if (typeof ack === 'function') {
         ack({
-          ok: false,
-          error: err && err.message ? err.message : String(err),
-          connection: getConnectionStatus()
+          ok: true,
+          connection: getConnectionStatus(),
+          note: err && err.message ? err.message : String(err)
         });
       }
     }
   });
 });
 
-// ---------- TikTok connection ----------
+// ---------- TikTok connection (single watcher + auto-retry) ----------
+const RETRY_MS = 10000;
+
 let tiktok = null;
+let desiredUsername = null; // null => not watching (manual disconnect)
+let intentionallyStopped = true;
+let reconnectTimer = null;
+let connectInFlight = null;
+let lastLoggedKey = '';
+
 let tiktokStatus = {
-  state: 'disconnected', // disconnected | connecting | connected | error
+  state: 'disconnected', // disconnected | waiting | connecting | reconnecting | connected
   username: '',
   roomId: '',
   error: null,
-  connectedAt: null
+  connectedAt: null,
+  attempt: 0,
+  retrying: false
 };
 
 function getConnectionStatus() {
@@ -387,6 +390,35 @@ function broadcastStatus() {
     connection: getConnectionStatus(),
     queue: queueSnapshot()
   });
+}
+
+function logOnce(key, level, message) {
+  if (key === lastLoggedKey) return;
+  lastLoggedKey = key;
+  console.log(`[tiktok] ${message}`);
+  io.emit('log', { level, message });
+}
+
+function clearRetryTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleRetry() {
+  if (intentionallyStopped || !desiredUsername) return;
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (intentionallyStopped || !desiredUsername) return;
+    attemptConnect(desiredUsername).catch(() => {});
+  }, RETRY_MS);
+}
+
+function setStatus(partial) {
+  tiktokStatus = { ...tiktokStatus, ...partial };
+  broadcastStatus();
 }
 
 function extractAvatar(user) {
@@ -422,7 +454,6 @@ function normalizeUser(user) {
 }
 
 function giftCoinValue(data) {
-  // Prefer diamondCount fields commonly present on gift events
   const details = data.giftDetails || data.extendedGiftInfo || {};
   const candidates = [
     data.diamondCount,
@@ -435,7 +466,6 @@ function giftCoinValue(data) {
   for (const c of candidates) {
     if (typeof c === 'number' && !Number.isNaN(c)) return c;
   }
-  // Fallback: Rose gift id is often 5655; treat unknown as big if name isn't Rose
   const name = (details.giftName || details.name || data.giftName || '').toLowerCase();
   if (name === 'rose') return 1;
   return 999;
@@ -446,177 +476,311 @@ function isRoseGift(data, coins) {
   const name = String(details.giftName || details.name || data.giftName || '').toLowerCase();
   if (name === 'rose') return true;
   if (coins <= (config.roseMaxCoins || 1)) return true;
-  // Common Rose giftId
   if (Number(data.giftId) === 5655) return true;
   return false;
 }
 
-async function connectTikTok(username) {
-  await disconnectTikTok();
-
-  let TikTokLiveConnection;
-  let WebcastEvent;
-  let ControlEvent;
-  try {
-    const mod = require('tiktok-live-connector');
-    TikTokLiveConnection = mod.TikTokLiveConnection;
-    WebcastEvent = mod.WebcastEvent;
-    ControlEvent = mod.ControlEvent;
-  } catch (err) {
-    tiktokStatus = {
-      state: 'error',
-      username,
-      roomId: '',
-      error: 'tiktok-live-connector not installed. Run npm install.',
-      connectedAt: null
-    };
-    broadcastStatus();
-    throw err;
+function isOfflineError(err) {
+  const msg = String((err && err.message) || err || '').toLowerCase();
+  const name = String((err && err.name) || '');
+  if (name === 'UserOfflineError') return true;
+  if (
+    msg.includes('offline') ||
+    msg.includes('not live') ||
+    msg.includes("isn't live") ||
+    msg.includes('is not live') ||
+    msg.includes('failed to retrieve room id') ||
+    msg.includes('room id')
+  ) {
+    return true;
   }
-
-  tiktokStatus = {
-    state: 'connecting',
-    username,
-    roomId: '',
-    error: null,
-    connectedAt: null
-  };
-  broadcastStatus();
-  io.emit('log', { level: 'info', message: `Connecting to @${username}...` });
-
-  const connection = new TikTokLiveConnection(username, {
-    processInitialData: false,
-    enableExtendedGiftInfo: true,
-    fetchRoomInfoOnConnect: true
-  });
-
-  connection.on(ControlEvent.CONNECTED, (state) => {
-    tiktokStatus = {
-      state: 'connected',
-      username,
-      roomId: state.roomId || connection.roomId || '',
-      error: null,
-      connectedAt: Date.now()
-    };
-    broadcastStatus();
-    io.emit('log', {
-      level: 'info',
-      message: `Connected to @${username} (room ${tiktokStatus.roomId})`
-    });
-  });
-
-  connection.on(ControlEvent.DISCONNECTED, () => {
-    if (tiktokStatus.state !== 'disconnected') {
-      tiktokStatus = {
-        state: 'disconnected',
-        username,
-        roomId: '',
-        error: null,
-        connectedAt: null
-      };
-      broadcastStatus();
-      io.emit('log', { level: 'info', message: 'Disconnected from TikTok Live' });
-    }
-  });
-
-  connection.on(ControlEvent.ERROR, ({ info, exception }) => {
-    const msg =
-      (exception && exception.message) ||
-      (typeof info === 'string' ? info : JSON.stringify(info)) ||
-      'Unknown TikTok error';
-    tiktokStatus.error = msg;
-    io.emit('log', { level: 'error', message: msg });
-    broadcastStatus();
-  });
-
-  connection.on(WebcastEvent.MEMBER, (data) => {
-    const user = normalizeUser(data.user);
-    enqueueScare({ type: 'instant', reason: 'join', user, priority: 1 });
-  });
-
-  connection.on(WebcastEvent.GIFT, (data) => {
-    // Streakable gifts fire many times; only act on streak end / non-streakable
-    const giftType = data.giftDetails && data.giftDetails.giftType;
-    if (giftType === 1 && !data.repeatEnd) {
-      return;
-    }
-    const user = normalizeUser(data.user);
-    const coins = giftCoinValue(data);
-    const giftName =
-      (data.giftDetails && data.giftDetails.giftName) ||
-      (data.extendedGiftInfo && data.extendedGiftInfo.name) ||
-      data.giftName ||
-      'Gift';
-    const repeat = Number(data.repeatCount) || 1;
-    const totalCoins = coins * (repeat > 0 ? repeat : 1);
-
-    if (isRoseGift(data, coins) || totalCoins <= (config.roseMaxCoins || 1)) {
-      enqueueScare({
-        type: 'instant',
-        reason: 'rose',
-        user,
-        giftName,
-        coins: totalCoins,
-        priority: 3
-      });
-    } else {
-      enqueueScare({
-        type: 'buildup',
-        reason: 'gift',
-        user,
-        giftName,
-        coins: totalCoins,
-        priority: 5
-      });
-    }
-  });
-
-  try {
-    const state = await connection.connect();
-    tiktok = connection;
-    if (tiktokStatus.state !== 'connected') {
-      tiktokStatus = {
-        state: 'connected',
-        username,
-        roomId: state.roomId || connection.roomId || '',
-        error: null,
-        connectedAt: Date.now()
-      };
-      broadcastStatus();
-    }
-    return state;
-  } catch (err) {
-    tiktok = null;
-    tiktokStatus = {
-      state: 'error',
-      username,
-      roomId: '',
-      error: err && err.message ? err.message : String(err),
-      connectedAt: null
-    };
-    broadcastStatus();
-    io.emit('log', { level: 'error', message: tiktokStatus.error });
-    throw err;
-  }
+  return false;
 }
 
-async function disconnectTikTok() {
-  if (tiktok) {
-    try {
-      await tiktok.disconnect();
-    } catch (_e) {
-      /* ignore */
+async function tearDownSocket() {
+  const conn = tiktok;
+  tiktok = null;
+  if (!conn) return;
+  try {
+    conn.removeAllListeners && conn.removeAllListeners();
+  } catch (_e) {}
+  try {
+    await conn.disconnect();
+  } catch (_e) {}
+}
+
+/** Start or keep watching a username. Safe to call from player + control together. */
+async function ensureWatching(username) {
+  const u = String(username || '').replace(/^@/, '').trim();
+  if (!u) throw new Error('Missing username');
+
+  // Already managing this user — do not open a second connection
+  if (desiredUsername === u && !intentionallyStopped) {
+    if (['connected', 'connecting', 'waiting', 'reconnecting'].includes(tiktokStatus.state)) {
+      // Keep the retry loop alive if we are only waiting
+      if (tiktokStatus.state === 'waiting' || tiktokStatus.state === 'reconnecting') {
+        scheduleRetry();
+      }
+      return getConnectionStatus();
     }
-    tiktok = null;
   }
-  tiktokStatus = {
+
+  // Switch user cleanly
+  if (desiredUsername && desiredUsername !== u) {
+    clearRetryTimer();
+    await tearDownSocket();
+    lastLoggedKey = '';
+  }
+
+  desiredUsername = u;
+  intentionallyStopped = false;
+  config.tiktokUsername = u;
+  return attemptConnect(u);
+}
+
+/** Manual Disconnect — stop retries. */
+async function stopWatching() {
+  intentionallyStopped = true;
+  desiredUsername = null;
+  clearRetryTimer();
+  connectInFlight = null;
+  await tearDownSocket();
+  lastLoggedKey = '';
+  setStatus({
     state: 'disconnected',
     username: config.tiktokUsername || '',
     roomId: '',
     error: null,
-    connectedAt: null
-  };
-  broadcastStatus();
+    connectedAt: null,
+    attempt: 0,
+    retrying: false
+  });
+  logOnce('stopped', 'info', 'Stopped watching TikTok Live (manual disconnect)');
+  return getConnectionStatus();
+}
+
+async function attemptConnect(username) {
+  if (intentionallyStopped || desiredUsername !== username) {
+    return getConnectionStatus();
+  }
+  if (tiktokStatus.state === 'connected' && tiktokStatus.username === username && tiktok) {
+    return getConnectionStatus();
+  }
+  if (connectInFlight) {
+    return connectInFlight;
+  }
+
+  connectInFlight = (async () => {
+    let TikTokLiveConnection;
+    let WebcastEvent;
+    let ControlEvent;
+    try {
+      const mod = require('tiktok-live-connector');
+      TikTokLiveConnection = mod.TikTokLiveConnection;
+      WebcastEvent = mod.WebcastEvent;
+      ControlEvent = mod.ControlEvent;
+    } catch (err) {
+      setStatus({
+        state: 'waiting',
+        username,
+        roomId: '',
+        error: 'tiktok-live-connector missing',
+        connectedAt: null,
+        retrying: true
+      });
+      scheduleRetry();
+      throw err;
+    }
+
+    const wasConnected = tiktokStatus.state === 'connected';
+    const attempt = (tiktokStatus.attempt || 0) + 1;
+    const nextState = wasConnected || attempt > 1 ? 'reconnecting' : 'connecting';
+    // Prefer "waiting" UI when we already know they are offline
+    const uiState =
+      tiktokStatus.state === 'waiting' || (tiktokStatus.error && isOfflineError({ message: tiktokStatus.error }))
+        ? 'waiting'
+        : nextState;
+
+    setStatus({
+      state: uiState === 'waiting' ? 'waiting' : nextState,
+      username,
+      roomId: '',
+      error: tiktokStatus.error,
+      connectedAt: null,
+      attempt,
+      retrying: true
+    });
+
+    if (attempt === 1) {
+      logOnce(`watch:${username}`, 'info', `Watching @${username} — will retry every ${RETRY_MS / 1000}s until live`);
+    }
+
+    await tearDownSocket();
+
+    if (intentionallyStopped || desiredUsername !== username) {
+      return getConnectionStatus();
+    }
+
+    const connection = new TikTokLiveConnection(username, {
+      processInitialData: false,
+      enableExtendedGiftInfo: true,
+      fetchRoomInfoOnConnect: true
+    });
+
+    connection.on(ControlEvent.CONNECTED, (state) => {
+      if (desiredUsername !== username || intentionallyStopped) return;
+      lastLoggedKey = '';
+      setStatus({
+        state: 'connected',
+        username,
+        roomId: state.roomId || connection.roomId || '',
+        error: null,
+        connectedAt: Date.now(),
+        retrying: false
+      });
+      logOnce(`connected:${username}:${state.roomId || ''}`, 'info', `Connected to @${username} (room ${state.roomId || connection.roomId || '?'})`);
+    });
+
+    connection.on(ControlEvent.DISCONNECTED, () => {
+      if (intentionallyStopped || desiredUsername !== username) return;
+      if (tiktokStatus.state === 'connected') {
+        setStatus({
+          state: 'reconnecting',
+          username,
+          roomId: '',
+          error: null,
+          connectedAt: null,
+          retrying: true
+        });
+        logOnce(`drop:${username}`, 'info', `Connection to @${username} dropped — retrying`);
+      }
+      scheduleRetry();
+    });
+
+    connection.on(ControlEvent.ERROR, ({ info, exception }) => {
+      // Quiet: do not spam control log on every error while retrying
+      const msg =
+        (exception && exception.message) ||
+        (typeof info === 'string' ? info : '') ||
+        '';
+      if (msg && intentionallyStopped === false) {
+        // keep latest error on status for control panel, without log spam
+        tiktokStatus.error = msg;
+      }
+    });
+
+    if (WebcastEvent.STREAM_END) {
+      connection.on(WebcastEvent.STREAM_END, () => {
+        if (intentionallyStopped || desiredUsername !== username) return;
+        setStatus({
+          state: 'waiting',
+          username,
+          roomId: '',
+          error: 'stream ended',
+          connectedAt: null,
+          retrying: true
+        });
+        logOnce(`ended:${username}`, 'info', `Live ended for @${username} — waiting to go live again`);
+        scheduleRetry();
+      });
+    }
+
+    connection.on(WebcastEvent.MEMBER, (data) => {
+      const user = normalizeUser(data.user);
+      enqueueScare({ type: 'instant', reason: 'join', user, priority: 1 });
+    });
+
+    connection.on(WebcastEvent.GIFT, (data) => {
+      const giftType = data.giftDetails && data.giftDetails.giftType;
+      if (giftType === 1 && !data.repeatEnd) return;
+      const user = normalizeUser(data.user);
+      const coins = giftCoinValue(data);
+      const giftName =
+        (data.giftDetails && data.giftDetails.giftName) ||
+        (data.extendedGiftInfo && data.extendedGiftInfo.name) ||
+        data.giftName ||
+        'Gift';
+      const repeat = Number(data.repeatCount) || 1;
+      const totalCoins = coins * (repeat > 0 ? repeat : 1);
+      if (isRoseGift(data, coins) || totalCoins <= (config.roseMaxCoins || 1)) {
+        enqueueScare({
+          type: 'instant',
+          reason: 'rose',
+          user,
+          giftName,
+          coins: totalCoins,
+          priority: 3
+        });
+      } else {
+        enqueueScare({
+          type: 'buildup',
+          reason: 'gift',
+          user,
+          giftName,
+          coins: totalCoins,
+          priority: 5
+        });
+      }
+    });
+
+    try {
+      const state = await connection.connect();
+      if (intentionallyStopped || desiredUsername !== username) {
+        try { await connection.disconnect(); } catch (_e) {}
+        return getConnectionStatus();
+      }
+      tiktok = connection;
+      setStatus({
+        state: 'connected',
+        username,
+        roomId: state.roomId || connection.roomId || '',
+        error: null,
+        connectedAt: Date.now(),
+        attempt,
+        retrying: false
+      });
+      lastLoggedKey = '';
+      logOnce(
+        `connected:${username}:${state.roomId || connection.roomId || ''}`,
+        'info',
+        `Connected to @${username} (room ${state.roomId || connection.roomId || '?'})`
+      );
+      return getConnectionStatus();
+    } catch (err) {
+      if (intentionallyStopped || desiredUsername !== username) {
+        return getConnectionStatus();
+      }
+      tiktok = null;
+      const offline = isOfflineError(err);
+      const msg = err && err.message ? err.message : String(err);
+      setStatus({
+        state: offline ? 'waiting' : 'reconnecting',
+        username,
+        roomId: '',
+        error: offline ? 'offline' : msg,
+        connectedAt: null,
+        attempt,
+        retrying: true
+      });
+      if (offline) {
+        logOnce(
+          `waiting:${username}`,
+          'info',
+          `Waiting for @${username} to go live… (retrying every ${RETRY_MS / 1000}s)`
+        );
+      } else {
+        logOnce(`retry:${username}:${msg.slice(0, 40)}`, 'info', `Retrying @${username}: ${msg}`);
+      }
+      scheduleRetry();
+      return getConnectionStatus();
+    }
+  })();
+
+  try {
+    return await connectInFlight;
+  } finally {
+    connectInFlight = null;
+  }
 }
 
 const PORT = Number(process.env.PORT) || Number(config.port) || 3847;

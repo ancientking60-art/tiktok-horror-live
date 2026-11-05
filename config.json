@@ -1,11 +1,11 @@
 {
-  "tiktokUsername": "",
+  "tiktokUsername": "dailytrendco21",
   "port": 3847,
   "showCaption": true,
   "instantCooldownMs": 8000,
   "joinThrottleMs": 20000,
   "roseMaxCoins": 1,
   "idleVolume": 0.85,
-  "scareVolume": 1.0,
+  "scareVolume": 1,
   "idleVolumeDuringScare": 0.25
 }

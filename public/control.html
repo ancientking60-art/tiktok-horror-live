@@ -150,19 +150,25 @@
     function setStatus(conn) {
       dot.className = 'dot';
       if (!conn) { statusText.textContent = 'Disconnected'; return; }
+      const name = conn.username || username.value.trim() || 'user';
       if (conn.state === 'connected') {
         dot.classList.add('connected');
-        statusText.textContent = `Connected to @${conn.username} (room ${conn.roomId || '?'})`;
+        statusText.textContent = `Connected to @${name}`;
+      } else if (conn.state === 'waiting') {
+        dot.classList.add('connecting');
+        statusText.textContent = `Waiting for @${name} to go live… (retrying)`;
+      } else if (conn.state === 'reconnecting') {
+        dot.classList.add('connecting');
+        statusText.textContent = 'Reconnecting…';
       } else if (conn.state === 'connecting') {
         dot.classList.add('connecting');
-        statusText.textContent = `Connecting to @${conn.username}…`;
+        statusText.textContent = `Connecting to @${name}…`;
       } else if (conn.state === 'error') {
-        dot.classList.add('error');
-        statusText.textContent = `Error: ${conn.error || 'unknown'}`;
+        // Treat errors as waiting/retrying so the panel stays calm
+        dot.classList.add('connecting');
+        statusText.textContent = `Waiting for @${name} to go live… (retrying)`;
       } else {
-        statusText.textContent = conn.username
-          ? `Disconnected (saved @${conn.username})`
-          : 'Disconnected';
+        statusText.textContent = 'Disconnected';
       }
     }
 
@@ -237,9 +243,9 @@
         applyConfig({ tiktokUsername: username.value.trim(), showCaption: showCaption.checked,
           instantCooldownMs: Number(instantCooldown.value), joinThrottleMs: Number(joinThrottle.value),
           roseMaxCoins: Number(roseMax.value) });
-        log('Connect OK');
+        log('Watching @' + username.value.trim() + ' — ' + (data.connection && data.connection.state));
       } catch (e) {
-        log('Connect failed: ' + e.message);
+        log('Connect issue: ' + e.message);
         refreshStatus();
       }
     };

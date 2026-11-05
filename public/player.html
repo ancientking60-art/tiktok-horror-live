@@ -227,12 +227,12 @@
     idle.addEventListener('pause', () => { if (!document.hidden) tryPlayIdle(); });
 
     function setHud(conn) {
-      if (!conn) { hud.textContent = ''; return; }
-      if (conn.state === 'connected') hud.textContent = 'LIVE · @' + conn.username;
-      else if (conn.state === 'connecting') hud.textContent = 'Connecting · @' + conn.username;
-      else if (conn.state === 'error') hud.textContent = 'Offline · ' + (conn.error || 'error');
-      else if (urlUser) hud.textContent = 'Waiting · @' + urlUser;
-      else hud.textContent = '';
+      // Keep viewer-facing UI clean: tiny LIVE mark only when connected; never show errors.
+      if (conn && conn.state === 'connected' && conn.username) {
+        hud.textContent = 'LIVE';
+      } else {
+        hud.textContent = '';
+      }
     }
 
     const socket = io({ transports: ['websocket', 'polling'] });
@@ -240,7 +240,7 @@
       if (urlUser) {
         socket.emit('connect_tiktok', { username: urlUser }, (res) => {
           if (res && res.connection) setHud(res.connection);
-          if (res && !res.ok) console.warn('TikTok connect:', res.error);
+          /* offline/retry is normal — no viewer-facing errors */
         });
       }
     });
