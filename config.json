@@ -1,5 +1,5 @@
 {
-  "tiktokUsername": "dailytrendco21",
+  "tiktokUsername": "silversecretsketchbook",
   "port": 3847,
   "showCaption": true,
   "instantCooldownMs": 8000,
@@ -7,5 +7,8 @@
   "roseMaxCoins": 1,
   "idleVolume": 0.85,
   "scareVolume": 1,
-  "idleVolumeDuringScare": 0.25
+  "idleVolumeDuringScare": 0.25,
+  "signApiKey": "",
+  "likeFlashCooldownMs": 3000,
+  "likesPerScare": 100
 }

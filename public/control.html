@@ -89,6 +89,7 @@
         <button id="simJoin">Simulate Join</button>
         <button id="simRose">Simulate Rose</button>
         <button id="simGift">Simulate Big Gift</button>
+        <button id="simLike">Simulate Likes</button>
       </div>
       <p class="hint" id="queue">Queue: empty</p>
       <p class="hint">Open the Player link in another tab (with sound) to watch scares.</p>
@@ -271,6 +272,13 @@
       const data = await api('/api/simulate/rose', { uniqueId: 'rose_fan', nickname: 'Rose Fan' });
       updateQueue(data.queue);
       log('Simulated Rose → ' + JSON.stringify(data));
+    };
+    document.getElementById('simLike').onclick = async () => {
+      const data = await api('/api/simulate/like', {
+        uniqueId: 'like_fan', nickname: 'Like Fan', count: 25
+      });
+      updateQueue(data.queue);
+      log('Simulated likes → ' + JSON.stringify(data));
     };
     document.getElementById('simGift').onclick = async () => {
       const data = await api('/api/simulate/gift', {

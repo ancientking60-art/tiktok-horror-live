@@ -221,6 +221,19 @@
       55% { opacity: 0.55; }
       100% { opacity: 0; }
     }
+  
+    #like-toast {
+      position: absolute; top: 8%; left: 50%; transform: translateX(-50%);
+      z-index: 8; opacity: 0; pointer-events: none;
+      font-family: "Special Elite", Georgia, serif;
+      font-size: clamp(18px, 3.2vw, 34px);
+      letter-spacing: 0.08em;
+      color: #e8f0ff;
+      text-shadow: 0 0 18px rgba(160,200,255,0.85), 0 2px 8px #000;
+      transition: opacity 0.25s ease;
+      white-space: nowrap;
+    }
+    #like-toast.show { opacity: 0.95; }
   </style>
 </head>
 <body>
@@ -246,6 +259,7 @@
       </div>
     </div>
     <div class="lightning-flash" id="lightning"></div>
+    <div id="like-toast"></div>
     <div id="caption">
       <img id="cap-avatar" alt="" />
       <div class="text" id="cap-text"></div>
@@ -507,6 +521,53 @@
       if (!scareActive) idle.volume = cfg.idleVolume;
     });
     socket.on('status', (s) => setHud(s && s.connection));
+    const likeToast = document.getElementById('like-toast');
+    let likeToastTimer = null;
+    function thunderCrack() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const t0 = audioCtx.currentTime;
+        const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.5, audioCtx.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) {
+          const env = Math.pow(1 - i / d.length, 2.2);
+          d[i] = (Math.random() * 2 - 1) * env;
+        }
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 180;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.55, t0);
+        gain.gain.exponentialRampToValueAtTime(0.01, t0 + 0.45);
+        src.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+        src.start();
+      } catch (_e) {}
+    }
+    socket.on('like_flash', (payload) => {
+      const name = (payload && payload.user && (payload.user.uniqueId || payload.user.nickname)) || 'viewer';
+      if (likeToast) {
+        likeToast.textContent = '@' + name + ' ⚡';
+        likeToast.classList.add('show');
+        if (likeToastTimer) clearTimeout(likeToastTimer);
+        likeToastTimer = setTimeout(() => likeToast.classList.remove('show'), 1200);
+      }
+      if (lightning) {
+        lightning.classList.remove('boom');
+        void lightning.offsetWidth;
+        lightning.classList.add('boom');
+      }
+      // brief idle flicker via CSS filter on stage
+      const stage = document.getElementById('stage');
+      if (stage) {
+        stage.style.filter = 'brightness(1.35) contrast(1.1)';
+        setTimeout(() => { stage.style.filter = ''; }, 120);
+        setTimeout(() => { stage.style.filter = 'brightness(0.85)'; setTimeout(()=>{ stage.style.filter=''; }, 80); }, 160);
+      }
+      thunderCrack();
+    });
     socket.on('scare', (payload) => playScare(payload));
   </script>
 </body>

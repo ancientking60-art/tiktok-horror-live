@@ -24,6 +24,27 @@ function saveConfig(cfg) {
 
 let config = loadConfig();
 
+const eventStats = {
+  chat: 0,
+  like: 0,
+  member: 0,
+  gift: 0,
+  social: 0,
+  follow: 0,
+  share: 0,
+  roomUser: 0,
+  lastLikeAt: 0,
+  likeTotalSession: 0
+};
+
+function bumpEvent(kind, detail) {
+  if (Object.prototype.hasOwnProperty.call(eventStats, kind)) eventStats[kind] += 1;
+  const msg = detail ? `[event] ${kind} ${detail}` : `[event] ${kind}`;
+  console.log(msg);
+  io.emit('log', { level: 'event', message: msg });
+}
+
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -33,15 +54,23 @@ const io = new Server(server, {
 app.use(express.json());
 
 // Render / uptime health check (keep-alive friendly)
-const APP_VERSION = '1.3.0-welcome';
+const APP_VERSION = '1.4.0-livefix';
 
 app.get('/health', (_req, res) => {
+  const conn = getConnectionStatus();
   res.status(200).json({
     ok: true,
     version: APP_VERSION,
     uptime: process.uptime(),
-    connection: getConnectionStatus().state,
-    username: getConnectionStatus().username || null
+    connection: conn.state,
+    username: conn.username || null,
+    events: {
+      chat: eventStats.chat,
+      like: eventStats.like,
+      member: eventStats.member,
+      gift: eventStats.gift,
+      likeTotalSession: eventStats.likeTotalSession
+    }
   });
 });
 
@@ -128,6 +157,8 @@ app.post('/api/config', (req, res) => {
   if (typeof body.idleVolumeDuringScare === 'number') {
     config.idleVolumeDuringScare = body.idleVolumeDuringScare;
   }
+  if (typeof body.likeFlashCooldownMs === 'number') config.likeFlashCooldownMs = body.likeFlashCooldownMs;
+  if (typeof body.likesPerScare === 'number') config.likesPerScare = body.likesPerScare;
   saveConfig(config);
   io.emit('config', publicConfig());
   res.json({ ok: true, config: publicConfig() });
@@ -163,8 +194,14 @@ app.post('/api/simulate/:kind', (req, res) => {
       coins: body.coins || 1000,
       priority: 5
     });
+  } else if (kind === 'like' || kind === 'likes') {
+    const batch = Math.max(1, Number(body.count || body.likes || 1));
+    eventStats.likeTotalSession += batch;
+    bumpEvent('like', '@' + user.uniqueId + ' +' + batch + ' (sim session ' + eventStats.likeTotalSession + ')');
+    handleLikes(user, batch);
+    result = { simulated: true, batch, sessionTotal: eventStats.likeTotalSession };
   } else {
-    return res.status(400).json({ ok: false, error: 'Unknown kind. Use join, rose, or gift.' });
+    return res.status(400).json({ ok: false, error: 'Unknown kind. Use join, rose, gift, or like.' });
   }
   res.json({ ok: true, ...result, queue: queueSnapshot() });
 });
@@ -220,7 +257,9 @@ function publicConfig() {
     roseMaxCoins: config.roseMaxCoins,
     idleVolume: config.idleVolume,
     scareVolume: config.scareVolume,
-    idleVolumeDuringScare: config.idleVolumeDuringScare
+    idleVolumeDuringScare: config.idleVolumeDuringScare,
+    likeFlashCooldownMs: config.likeFlashCooldownMs ?? 3000,
+    likesPerScare: config.likesPerScare ?? 100
   };
 }
 
@@ -585,10 +624,38 @@ function extractAvatar(user) {
 
 function normalizeUser(user) {
   return {
-    uniqueId: (user && (user.uniqueId || user.displayId || user.nickName)) || 'unknown',
-    nickname: (user && (user.nickname || user.nickName || user.uniqueId)) || 'Viewer',
+    uniqueId: (user && (user.uniqueId || user.displayId || user.username || user.nickName)) || 'unknown',
+    nickname: (user && (user.nickname || user.nickName || user.uniqueId || user.displayId)) || 'Viewer',
     profilePictureUrl: extractAvatar(user)
   };
+}
+
+function handleLikes(user, batch) {
+  const now = Date.now();
+  const cooldown = Number(config.likeFlashCooldownMs) || 3000;
+  const perScare = Number(config.likesPerScare) || 100;
+
+  // Rate-limited lightning flash for every like batch
+  if (now - eventStats.lastLikeAt >= cooldown) {
+    eventStats.lastLikeAt = now;
+    io.emit('like_flash', {
+      user,
+      count: batch,
+      sessionTotal: eventStats.likeTotalSession
+    });
+  }
+
+  // Every N cumulative likes -> short instant scare (ghost glimpse)
+  const prevMilestone = Math.floor((eventStats.likeTotalSession - batch) / perScare);
+  const nextMilestone = Math.floor(eventStats.likeTotalSession / perScare);
+  if (nextMilestone > prevMilestone) {
+    enqueueScare({
+      type: 'instant',
+      reason: 'likes',
+      user,
+      priority: 2
+    });
+  }
 }
 
 function giftCoinValue(data) {
@@ -633,6 +700,11 @@ function isOfflineError(err) {
     return true;
   }
   return false;
+}
+
+function isBusinessPlanError(err) {
+  const msg = String((err && err.message) || err || '').toLowerCase();
+  return msg.includes('business plan') || msg.includes('eulerstream.com/pricing');
 }
 
 async function tearDownSocket() {
@@ -717,6 +789,8 @@ async function attemptConnect(username) {
       TikTokLiveConnection = mod.TikTokLiveConnection;
       WebcastEvent = mod.WebcastEvent;
       ControlEvent = mod.ControlEvent;
+      var WebcastHttpClient = mod.WebcastHttpClient;
+      var getRandomPresets = mod.getRandomPresets;
     } catch (err) {
       setStatus({
         state: 'waiting',
@@ -759,11 +833,30 @@ async function attemptConnect(username) {
       return getConnectionStatus();
     }
 
-    const connection = new TikTokLiveConnection(username, {
+    // Match stickfight-game: HTTPS fix + lean options (extended gift info hits Euler Business routes)
+    if (typeof WebcastHttpClient !== 'undefined' && WebcastHttpClient?.prototype && !WebcastHttpClient.prototype.__httpsFix) {
+      WebcastHttpClient.prototype.getBaseUrl = function (host) {
+        return /^(localhost|127\.|\[?::1)/.test(host) ? `http://${host}` : `https://${host}`;
+      };
+      WebcastHttpClient.prototype.__httpsFix = true;
+    }
+
+    const signKey =
+      process.env.EULER_API_KEY ||
+      process.env.SIGN_API_KEY ||
+      config.signApiKey ||
+      '';
+    const options = {
       processInitialData: false,
-      enableExtendedGiftInfo: true,
-      fetchRoomInfoOnConnect: true
-    });
+      fetchRoomInfoOnConnect: true,
+      enableExtendedGiftInfo: false
+    };
+    if (signKey) options.signApiKey = String(signKey).trim();
+    if (typeof getRandomPresets === 'function') {
+      try { options.clientPresets = getRandomPresets(); } catch (_e) {}
+    }
+
+    const connection = new TikTokLiveConnection(username, options);
 
     connection.on(ControlEvent.CONNECTED, (state) => {
       if (desiredUsername !== username || intentionallyStopped) return;
@@ -776,6 +869,8 @@ async function attemptConnect(username) {
         connectedAt: Date.now(),
         retrying: false
       });
+      eventStats.likeTotalSession = 0;
+      eventStats.chat = 0; eventStats.like = 0; eventStats.member = 0; eventStats.gift = 0;
       logOnce(`connected:${username}:${state.roomId || ''}`, 'info', `Connected to @${username} (room ${state.roomId || connection.roomId || '?'})`);
     });
 
@@ -825,21 +920,56 @@ async function attemptConnect(username) {
 
     connection.on(WebcastEvent.MEMBER, (data) => {
       const user = normalizeUser(data.user);
+      bumpEvent('member', '@' + user.uniqueId);
       enqueueJoinSequence(user);
     });
 
+    connection.on(WebcastEvent.CHAT, (data) => {
+      const user = normalizeUser(data.user);
+      const comment = String(data.comment || data.content || '').slice(0, 80);
+      bumpEvent('chat', '@' + user.uniqueId + ' ' + comment);
+    });
+
+    connection.on(WebcastEvent.LIKE, (data) => {
+      const user = normalizeUser(data.user);
+      const batch = Math.max(1, Number(data.likeCount || data.count || 1));
+      eventStats.likeTotalSession += batch;
+      bumpEvent('like', '@' + user.uniqueId + ' +' + batch + ' (session ' + eventStats.likeTotalSession + ')');
+      handleLikes(user, batch);
+    });
+
+    connection.on(WebcastEvent.FOLLOW, (data) => {
+      const user = normalizeUser(data.user);
+      bumpEvent('follow', '@' + user.uniqueId);
+    });
+
+    connection.on(WebcastEvent.SHARE, (data) => {
+      const user = normalizeUser(data.user);
+      bumpEvent('share', '@' + user.uniqueId);
+    });
+
+    connection.on(WebcastEvent.ROOM_USER, (data) => {
+      eventStats.roomUser += 1;
+      // quiet — high frequency
+    });
+
     connection.on(WebcastEvent.GIFT, (data) => {
-      const giftType = data.giftDetails && data.giftDetails.giftType;
+      const giftType =
+        (data.giftDetails && data.giftDetails.giftType) ||
+        (data.gift && data.gift.type) ||
+        data.giftType;
       if (giftType === 1 && !data.repeatEnd) return;
       const user = normalizeUser(data.user);
       const coins = giftCoinValue(data);
       const giftName =
         (data.giftDetails && data.giftDetails.giftName) ||
+        (data.gift && data.gift.name) ||
         (data.extendedGiftInfo && data.extendedGiftInfo.name) ||
         data.giftName ||
         'Gift';
       const repeat = Number(data.repeatCount) || 1;
       const totalCoins = coins * (repeat > 0 ? repeat : 1);
+      bumpEvent('gift', '@' + user.uniqueId + ' ' + giftName + ' x' + repeat + ' (' + totalCoins + ' coins)');
       if (isRoseGift(data, coins) || totalCoins <= (config.roseMaxCoins || 1)) {
         enqueueScare({
           type: 'instant',
@@ -890,12 +1020,13 @@ async function attemptConnect(username) {
       }
       tiktok = null;
       const offline = isOfflineError(err);
+      const business = isBusinessPlanError(err);
       const msg = err && err.message ? err.message : String(err);
       setStatus({
         state: offline ? 'waiting' : 'reconnecting',
         username,
         roomId: '',
-        error: offline ? 'offline' : msg,
+        error: offline ? 'offline' : (business ? 'euler_business_or_rate_limit' : msg),
         connectedAt: null,
         attempt,
         retrying: true
@@ -905,6 +1036,12 @@ async function attemptConnect(username) {
           `waiting:${username}`,
           'info',
           `Waiting for @${username} to go live… (retrying every ${RETRY_MS / 1000}s)`
+        );
+      } else if (business) {
+        logOnce(
+          `euler:${username}`,
+          'info',
+          `Euler signing blocked (Business/rate). Retrying with fresh device… Set free EULER_API_KEY env var if this persists.`
         );
       } else {
         logOnce(`retry:${username}:${msg.slice(0, 40)}`, 'info', `Retrying @${username}: ${msg}`);

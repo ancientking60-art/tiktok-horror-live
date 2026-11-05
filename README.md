@@ -67,6 +67,15 @@ Then open `http://localhost:3847/control.html?user=YOUR_TIKTOK_NAME`
 
 ---
 
+## TikTok connection notes
+
+This app uses the same approach as **stickfight-game**:
+- `tiktok-live-connector` with `processInitialData: false`
+- HTTPS fix for TikTok web requests
+- Optional free Euler Stream API key via Render env var `EULER_API_KEY` (or `SIGN_API_KEY`) if anonymous signing gets rate-limited / asks for a Business plan
+
+Create a free Community key at https://www.eulerstream.com (no card required) only if Render logs show Euler Business/signing errors.
+
 ## Limits
 
 - TikTok must be **LIVE** for real events
