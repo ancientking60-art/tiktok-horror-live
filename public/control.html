@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Horror Live — Control Panel</title>
+  <style>
+    :root {
+      --bg: #0d0a0a; --card: #1a1212; --line: #3a2222; --text: #f3e9e4;
+      --muted: #b9a29a; --accent: #c43c3c; --ok: #3ecf8e; --warn: #e0a84a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at top, #1a0f0f, var(--bg));
+      color: var(--text); min-height: 100vh; padding: 28px;
+    }
+    h1 { font-weight: 600; letter-spacing: 0.04em; margin: 0 0 6px; }
+    .sub { color: var(--muted); margin-bottom: 24px; }
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 18px; max-width: 1100px;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 18px 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+    }
+    .card h2 {
+      font-size: 15px; text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--muted); margin: 0 0 14px;
+    }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="number"] {
+      width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+      background: #120c0c; color: var(--text); font-size: 15px; margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button {
+      appearance: none; border: 1px solid var(--line); background: #2a1717; color: var(--text);
+      padding: 11px 16px; border-radius: 9px; font-size: 14px; cursor: pointer;
+    }
+    button:hover { background: #3a1f1f; border-color: #5a3030; }
+    button.primary { background: var(--accent); border-color: #e05555; font-weight: 600; }
+    button.ghost { background: transparent; }
+    .status {
+      display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 10px;
+      background: #120c0c; border: 1px solid var(--line); margin-bottom: 12px; font-size: 14px;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #666; flex-shrink: 0; }
+    .dot.connected { background: var(--ok); box-shadow: 0 0 10px rgba(62,207,142,0.6); }
+    .dot.connecting { background: var(--warn); box-shadow: 0 0 10px rgba(224,168,74,0.55); }
+    .dot.error { background: var(--accent); box-shadow: 0 0 10px rgba(196,60,60,0.55); }
+    .links a { color: #f0c2c2; display: block; margin: 6px 0; word-break: break-all; }
+    .check { display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; font-size: 14px; }
+    #log {
+      height: 220px; overflow: auto; background: #0a0707; border: 1px solid var(--line);
+      border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+    }
+    .hint { font-size: 13px; color: var(--muted); line-height: 1.45; margin-top: 8px; }
+    #queue { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+    code { background: #120c0c; padding: 1px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Horror Live — Control Panel</h1>
+  <p class="sub">Connect your TikTok Live, test scares, and copy the player link for LIVE Studio.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Connection</h2>
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <label for="username">TikTok username (without @)</label>
+      <input id="username" type="text" placeholder="your_tiktok_name" />
+      <div class="row">
+        <button class="primary" id="btnConnect">Connect</button>
+        <button id="btnDisconnect">Disconnect</button>
+        <button class="ghost" id="btnSave">Save settings</button>
+      </div>
+      <p class="hint">You must be <strong>LIVE</strong> for real joins/gifts. On Render free tier the service sleeps after ~15 minutes idle — first wake can take ~50 seconds.</p>
+    </div>
+
+    <div class="card">
+      <h2>Simulate (test without Live)</h2>
+      <div class="row">
+        <button id="simJoin">Simulate Join</button>
+        <button id="simRose">Simulate Rose</button>
+        <button id="simGift">Simulate Big Gift</button>
+      </div>
+      <p class="hint" id="queue">Queue: empty</p>
+      <p class="hint">Open the Player link in another tab (with sound) to watch scares.</p>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <label class="check"><input type="checkbox" id="showCaption" checked /> Show name caption during scare</label>
+      <label for="instantCooldown">Instant scare cooldown (ms)</label>
+      <input id="instantCooldown" type="number" min="0" step="500" value="8000" />
+      <label for="joinThrottle">Join throttle (ms)</label>
+      <input id="joinThrottle" type="number" min="0" step="1000" value="20000" />
+      <label for="roseMax">Rose / cheap gift max coins</label>
+      <input id="roseMax" type="number" min="1" step="1" value="1" />
+    </div>
+
+    <div class="card">
+      <h2>Links for LIVE Studio</h2>
+      <div class="links">
+        <a id="playerLink" href="/player.html" target="_blank">Player</a>
+        <a id="controlLink" href="/control.html" target="_blank">Control panel</a>
+        <a id="healthLink" href="/health" target="_blank">Health check</a>
+      </div>
+      <p class="hint">
+        In TikTok LIVE Studio add a <strong>Browser / Link</strong> source pointing at the Player URL
+        (include <code>?user=yourname</code>). Size <strong>1080 × 1920</strong>. Enable audio.
+        Click the player once if sound is blocked.
+      </p>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2>Event log</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const urlUser = (params.get('user') || params.get('u') || '').replace(/^@/, '').trim();
+
+    const logEl = document.getElementById('log');
+    const dot = document.getElementById('dot');
+    const statusText = document.getElementById('statusText');
+    const queueEl = document.getElementById('queue');
+    const username = document.getElementById('username');
+    const showCaption = document.getElementById('showCaption');
+    const instantCooldown = document.getElementById('instantCooldown');
+    const joinThrottle = document.getElementById('joinThrottle');
+    const roseMax = document.getElementById('roseMax');
+
+    if (urlUser) username.value = urlUser;
+
+    function log(msg) {
+      const t = new Date().toLocaleTimeString();
+      logEl.textContent = `[${t}] ${msg}\n` + logEl.textContent;
+    }
+
+    function setStatus(conn) {
+      dot.className = 'dot';
+      if (!conn) { statusText.textContent = 'Disconnected'; return; }
+      if (conn.state === 'connected') {
+        dot.classList.add('connected');
+        statusText.textContent = `Connected to @${conn.username} (room ${conn.roomId || '?'})`;
+      } else if (conn.state === 'connecting') {
+        dot.classList.add('connecting');
+        statusText.textContent = `Connecting to @${conn.username}…`;
+      } else if (conn.state === 'error') {
+        dot.classList.add('error');
+        statusText.textContent = `Error: ${conn.error || 'unknown'}`;
+      } else {
+        statusText.textContent = conn.username
+          ? `Disconnected (saved @${conn.username})`
+          : 'Disconnected';
+      }
+    }
+
+    function playerUrlFor(user) {
+      const u = (user || username.value || '').replace(/^@/, '').trim();
+      return location.origin + '/player.html' + (u ? ('?user=' + encodeURIComponent(u)) : '');
+    }
+
+    function applyConfig(c) {
+      if (!c) return;
+      if (c.tiktokUsername && !username.value) username.value = c.tiktokUsername;
+      showCaption.checked = !!c.showCaption;
+      instantCooldown.value = c.instantCooldownMs;
+      joinThrottle.value = c.joinThrottleMs;
+      roseMax.value = c.roseMaxCoins;
+      const origin = location.origin;
+      const u = (username.value || c.tiktokUsername || '').replace(/^@/, '').trim();
+      const q = u ? ('?user=' + encodeURIComponent(u)) : '';
+      document.getElementById('playerLink').href = origin + '/player.html' + q;
+      document.getElementById('playerLink').textContent = origin + '/player.html' + q + '  ← LIVE Studio';
+      document.getElementById('controlLink').href = origin + '/control.html' + q;
+      document.getElementById('healthLink').href = origin + '/health';
+    }
+
+    function updateQueue(q) {
+      if (!q) { queueEl.textContent = 'Queue: empty'; return; }
+      const playing = q.playing
+        ? `playing ${q.playing.type} (@${q.playing.user || '?'})`
+        : 'idle';
+      queueEl.textContent = `Queue: ${playing} · waiting ${q.length}`;
+    }
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : '{}'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    username.addEventListener('input', () => applyConfig({
+      showCaption: showCaption.checked,
+      instantCooldownMs: Number(instantCooldown.value),
+      joinThrottleMs: Number(joinThrottle.value),
+      roseMaxCoins: Number(roseMax.value),
+      tiktokUsername: username.value
+    }));
+
+    document.getElementById('btnSave').onclick = async () => {
+      try {
+        const data = await api('/api/config', {
+          tiktokUsername: username.value.trim(),
+          showCaption: showCaption.checked,
+          instantCooldownMs: Number(instantCooldown.value),
+          joinThrottleMs: Number(joinThrottle.value),
+          roseMaxCoins: Number(roseMax.value)
+        });
+        applyConfig(data.config);
+        log('Settings saved');
+      } catch (e) { log('Save failed: ' + e.message); }
+    };
+
+    document.getElementById('btnConnect').onclick = async () => {
+      try {
+        await api('/api/config', { tiktokUsername: username.value.trim() });
+        log('Connecting…');
+        const data = await api('/api/connect', { username: username.value.trim() });
+        setStatus(data.connection);
+        applyConfig({ tiktokUsername: username.value.trim(), showCaption: showCaption.checked,
+          instantCooldownMs: Number(instantCooldown.value), joinThrottleMs: Number(joinThrottle.value),
+          roseMaxCoins: Number(roseMax.value) });
+        log('Connect OK');
+      } catch (e) {
+        log('Connect failed: ' + e.message);
+        refreshStatus();
+      }
+    };
+
+    document.getElementById('btnDisconnect').onclick = async () => {
+      try {
+        const data = await api('/api/disconnect');
+        setStatus(data.connection);
+        log('Disconnected');
+      } catch (e) { log('Disconnect failed: ' + e.message); }
+    };
+
+    document.getElementById('simJoin').onclick = async () => {
+      const data = await api('/api/simulate/join', {
+        uniqueId: 'viewer_' + Math.floor(Math.random() * 900 + 100), nickname: 'Test Joiner'
+      });
+      updateQueue(data.queue);
+      log('Simulated join → ' + JSON.stringify(data));
+    };
+    document.getElementById('simRose').onclick = async () => {
+      const data = await api('/api/simulate/rose', { uniqueId: 'rose_fan', nickname: 'Rose Fan' });
+      updateQueue(data.queue);
+      log('Simulated Rose → ' + JSON.stringify(data));
+    };
+    document.getElementById('simGift').onclick = async () => {
+      const data = await api('/api/simulate/gift', {
+        uniqueId: 'big_gifter', nickname: 'Big Gifter', giftName: 'Universe', coins: 1000
+      });
+      updateQueue(data.queue);
+      log('Simulated big gift → ' + JSON.stringify(data));
+    };
+
+    async function refreshStatus() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      applyConfig(data.config);
+      setStatus(data.connection);
+      updateQueue(data.queue);
+    }
+
+    const socket = io({ transports: ['websocket', 'polling'] });
+    socket.on('config', applyConfig);
+    socket.on('status', (s) => { setStatus(s.connection); updateQueue(s.queue); });
+    socket.on('queue', updateQueue);
+    socket.on('scare', (p) => log(`SCARE ${p.type} (${p.reason}) @${p.user && p.user.uniqueId}`));
+    socket.on('scare_end', () => log('Scare ended'));
+    socket.on('log', (l) => log(l.message));
+
+    refreshStatus().catch((e) => log('Status error: ' + e.message));
+
+    // Auto-connect if ?user= is present
+    if (urlUser) {
+      setTimeout(() => document.getElementById('btnConnect').click(), 400);
+    }
+  </script>
+</body>
+</html>

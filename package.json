@@ -1,0 +1,19 @@
+{
+  "name": "tiktok-horror-live",
+  "version": "1.1.0",
+  "description": "Hosted TikTok Live interactive horror rain + jump-scare player (Render-ready)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "tiktok-live-connector": "^2.5.0"
+  },
+  "license": "MIT"
+}

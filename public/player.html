@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1080, height=1920, initial-scale=1" />
+  <title>Horror Live Player</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; background: #000; overflow: hidden;
+      font-family: "Segoe UI", Georgia, serif; color: #f2e8e0;
+    }
+    #stage {
+      position: relative; width: 1080px; height: 1920px;
+      max-width: 100vw; max-height: 100vh; margin: 0 auto;
+      background: #000; overflow: hidden;
+    }
+    @media (max-aspect-ratio: 9/16) {
+      #stage { width: 100vw; height: calc(100vw * 16 / 9); }
+    }
+    @media (min-aspect-ratio: 9/16) {
+      #stage { height: 100vh; width: calc(100vh * 9 / 16); }
+    }
+    video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; background: #000;
+    }
+    #idle { z-index: 1; }
+    #scare {
+      z-index: 2; opacity: 0; pointer-events: none;
+      transition: opacity 0.35s ease;
+    }
+    #scare.visible { opacity: 1; }
+    #vignette {
+      position: absolute; inset: 0; z-index: 3; pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.55) 100%);
+    }
+    #caption {
+      position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%);
+      z-index: 4; display: none; align-items: center; gap: 18px;
+      padding: 14px 28px 14px 14px;
+      background: linear-gradient(180deg, rgba(20,0,0,0.55), rgba(0,0,0,0.72));
+      border: 1px solid rgba(180, 40, 40, 0.45); border-radius: 999px;
+      box-shadow: 0 0 40px rgba(120, 0, 0, 0.35);
+      backdrop-filter: blur(4px); max-width: 86%; opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    #caption.show { display: flex; opacity: 1; }
+    #caption img {
+      width: 64px; height: 64px; border-radius: 50%; object-fit: cover;
+      border: 2px solid rgba(220, 180, 180, 0.7); background: #222; flex-shrink: 0;
+    }
+    #caption .text {
+      font-size: 28px; letter-spacing: 0.04em; line-height: 1.25;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.9), 0 0 18px rgba(160,0,0,0.45);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #caption .text em { font-style: italic; color: #e8cfcf; font-weight: 400; }
+    #caption .text strong { color: #fff; font-weight: 600; }
+    #click-unlock {
+      position: absolute; inset: 0; z-index: 10; display: flex;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.72); cursor: pointer; text-align: center; padding: 40px;
+    }
+    #click-unlock.hidden { display: none; }
+    #click-unlock .box {
+      border: 1px solid rgba(180,60,60,0.5); padding: 36px 48px;
+      border-radius: 12px; background: rgba(20,0,0,0.7); max-width: 80%;
+    }
+    #click-unlock h1 { font-size: 36px; margin-bottom: 12px; font-weight: 500; letter-spacing: 0.08em; }
+    #click-unlock p { font-size: 22px; opacity: 0.85; line-height: 1.4; }
+    #hud {
+      position: absolute; top: 18px; left: 18px; z-index: 5;
+      font-size: 14px; letter-spacing: 0.06em; opacity: 0.55;
+      text-shadow: 0 1px 6px #000; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <video id="idle" src="/videos/idle_loop_60s.mp4" muted playsinline loop preload="auto"></video>
+    <video id="scare" src="/videos/scare_instant.mp4" playsinline preload="auto"></video>
+    <div id="vignette"></div>
+    <div id="caption">
+      <img id="cap-avatar" alt="" />
+      <div class="text" id="cap-text"></div>
+    </div>
+    <div id="hud"></div>
+    <div id="click-unlock">
+      <div class="box">
+        <h1>CLICK TO START</h1>
+        <p>Unlocks sound for the horror loop.<br/>In TikTok LIVE Studio, enable audio on this Browser source.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const urlUser = (params.get('user') || params.get('u') || '').replace(/^@/, '').trim();
+
+    const idle = document.getElementById('idle');
+    const scare = document.getElementById('scare');
+    const caption = document.getElementById('caption');
+    const capAvatar = document.getElementById('cap-avatar');
+    const capText = document.getElementById('cap-text');
+    const unlock = document.getElementById('click-unlock');
+    const hud = document.getElementById('hud');
+
+    let cfg = {
+      showCaption: true, idleVolume: 0.85, scareVolume: 1.0, idleVolumeDuringScare: 0.25
+    };
+    let unlocked = false;
+    let scareActive = false;
+    let scareEndTimer = null;
+
+    ['/videos/idle_loop_60s.mp4','/videos/scare_instant.mp4','/videos/scare_buildup_20s.mp4']
+      .forEach((src) => { const v = document.createElement('video'); v.preload='auto'; v.muted=true; v.src=src; v.load(); });
+
+    function tryPlayIdle() {
+      idle.loop = true;
+      idle.volume = scareActive ? cfg.idleVolumeDuringScare : cfg.idleVolume;
+      const p = idle.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+
+    function unlockAudio() {
+      unlocked = true;
+      unlock.classList.add('hidden');
+      idle.muted = false;
+      tryPlayIdle();
+    }
+
+    unlock.addEventListener('click', unlockAudio);
+    document.addEventListener('pointerdown', () => { if (!unlocked) unlockAudio(); }, { once: true });
+
+    idle.muted = true;
+    tryPlayIdle();
+    setTimeout(() => {
+      idle.muted = false;
+      idle.volume = cfg.idleVolume;
+      const p = idle.play();
+      if (p && p.then) {
+        p.then(() => { unlocked = true; unlock.classList.add('hidden'); })
+         .catch(() => { idle.muted = true; tryPlayIdle(); });
+      }
+    }, 300);
+
+    function hideCaption() { caption.classList.remove('show'); }
+
+    function showCaption(user, reason) {
+      if (!cfg.showCaption) { hideCaption(); return; }
+      const name = (user && (user.uniqueId || user.nickname)) || 'someone';
+      let line = '';
+      if (reason === 'join') line = `<strong>@${escapeHtml(name)}</strong> <em>walked into the storm…</em>`;
+      else if (reason === 'rose') line = `<strong>@${escapeHtml(name)}</strong> <em>offered a rose…</em>`;
+      else line = `<strong>@${escapeHtml(name)}</strong> <em>summoned her…</em>`;
+      capText.innerHTML = line;
+      if (user && user.profilePictureUrl) {
+        capAvatar.style.display = 'block';
+        capAvatar.src = user.profilePictureUrl;
+        capAvatar.onerror = () => { capAvatar.style.display = 'none'; };
+      } else {
+        capAvatar.style.display = 'none';
+        capAvatar.removeAttribute('src');
+      }
+      caption.classList.add('show');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function endScare() {
+      if (!scareActive) return;
+      scareActive = false;
+      if (scareEndTimer) { clearTimeout(scareEndTimer); scareEndTimer = null; }
+      scare.classList.remove('visible');
+      try { scare.pause(); } catch (_e) {}
+      hideCaption();
+      idle.volume = cfg.idleVolume;
+      tryPlayIdle();
+      if (socket && socket.connected) socket.emit('scare_finished');
+    }
+
+    function playScare(payload) {
+      if (scareActive) endScare();
+      scareActive = true;
+      const src = payload.video || '/videos/scare_instant.mp4';
+      const abs = new URL(src, location.origin).pathname;
+      const current = scare.getAttribute('data-src') || '';
+      if (current !== abs) {
+        scare.src = src;
+        scare.setAttribute('data-src', abs);
+        scare.load();
+      }
+      scare.currentTime = 0;
+      scare.volume = cfg.scareVolume;
+      scare.muted = false;
+      idle.volume = cfg.idleVolumeDuringScare;
+      showCaption(payload.user, payload.reason);
+
+      const start = () => {
+        scare.classList.add('visible');
+        const p = scare.play();
+        if (p && p.catch) {
+          p.catch(() => {
+            scare.muted = true;
+            scare.play().catch(() => endScare());
+          });
+        }
+      };
+      if (scare.readyState >= 2) start();
+      else {
+        const onReady = () => { scare.removeEventListener('canplay', onReady); start(); };
+        scare.addEventListener('canplay', onReady);
+        setTimeout(() => { scare.removeEventListener('canplay', onReady); if (scareActive) start(); }, 1500);
+      }
+      const expectedMs = payload.type === 'buildup' ? 20500 : 3800;
+      if (scareEndTimer) clearTimeout(scareEndTimer);
+      scareEndTimer = setTimeout(() => { if (scareActive) endScare(); }, expectedMs + 800);
+    }
+
+    scare.addEventListener('ended', () => endScare());
+    scare.addEventListener('error', () => endScare());
+    idle.addEventListener('ended', () => { idle.currentTime = 0; tryPlayIdle(); });
+    idle.addEventListener('pause', () => { if (!document.hidden) tryPlayIdle(); });
+
+    function setHud(conn) {
+      if (!conn) { hud.textContent = ''; return; }
+      if (conn.state === 'connected') hud.textContent = 'LIVE · @' + conn.username;
+      else if (conn.state === 'connecting') hud.textContent = 'Connecting · @' + conn.username;
+      else if (conn.state === 'error') hud.textContent = 'Offline · ' + (conn.error || 'error');
+      else if (urlUser) hud.textContent = 'Waiting · @' + urlUser;
+      else hud.textContent = '';
+    }
+
+    const socket = io({ transports: ['websocket', 'polling'] });
+    socket.on('connect', () => {
+      if (urlUser) {
+        socket.emit('connect_tiktok', { username: urlUser }, (res) => {
+          if (res && res.connection) setHud(res.connection);
+          if (res && !res.ok) console.warn('TikTok connect:', res.error);
+        });
+      }
+    });
+    socket.on('config', (c) => {
+      cfg = Object.assign(cfg, c || {});
+      if (!scareActive) idle.volume = cfg.idleVolume;
+    });
+    socket.on('status', (s) => setHud(s && s.connection));
+    socket.on('scare', (payload) => playScare(payload));
+  </script>
+</body>
+</html>
