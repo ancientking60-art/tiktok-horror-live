@@ -784,13 +784,16 @@ async function attemptConnect(username) {
     let TikTokLiveConnection;
     let WebcastEvent;
     let ControlEvent;
+    let WebcastHttpClient;
+    let getRandomPresets;
+    let mod;
     try {
-      const mod = require('tiktok-live-connector');
+      mod = require('tiktok-live-connector');
       TikTokLiveConnection = mod.TikTokLiveConnection;
       WebcastEvent = mod.WebcastEvent;
       ControlEvent = mod.ControlEvent;
-      var WebcastHttpClient = mod.WebcastHttpClient;
-      var getRandomPresets = mod.getRandomPresets;
+      WebcastHttpClient = mod.WebcastHttpClient;
+      getRandomPresets = mod.getRandomPresets;
     } catch (err) {
       setStatus({
         state: 'waiting',
@@ -841,17 +844,21 @@ async function attemptConnect(username) {
       WebcastHttpClient.prototype.__httpsFix = true;
     }
 
-    const signKey =
+    const signKey = String(
       process.env.EULER_API_KEY ||
       process.env.SIGN_API_KEY ||
       config.signApiKey ||
-      '';
+      ''
+    ).trim();
+    if (signKey && mod.SignConfig) {
+      try { mod.SignConfig.apiKey = signKey; } catch (_e) {}
+    }
     const options = {
       processInitialData: false,
       fetchRoomInfoOnConnect: true,
       enableExtendedGiftInfo: false
     };
-    if (signKey) options.signApiKey = String(signKey).trim();
+    if (signKey) options.signApiKey = signKey;
     if (typeof getRandomPresets === 'function') {
       try { options.clientPresets = getRandomPresets(); } catch (_e) {}
     }
