@@ -6,7 +6,7 @@ Designed to run as a free **Render** web service. You open a link — no Windows
 
 | Event | Scare |
 |--------|--------|
-| Viewer joins | Instant jump scare (~3s), throttled |
+| Viewer joins | Instant jump scare (~3s), then she hugs their framed photo (~5s), throttled |
 | Rose / 1-coin gift | Instant jump scare |
 | Bigger gift | 20s slow build-up, then scare |
 
@@ -64,6 +64,9 @@ Then open `http://localhost:3847/control.html?user=YOUR_TIKTOK_NAME`
 - Join throttle ~20s
 - Build-up is never interrupted; extras wait in queue
 - Name caption like `@name summoned her…` (toggle in control)
+- After a join scare she holds that viewer's framed profile photo against her dress, name underneath, for about 5 seconds, then the idle rain returns. Missing photos fall back to a silhouette.
+
+The rain and scare clips never show her hugging a portrait. The welcome is a still layered composite (her arms in front of a live photo), not animated footage of the hug. The source videos are unchanged.
 
 ---
 
