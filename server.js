@@ -54,7 +54,7 @@ const io = new Server(server, {
 app.use(express.json());
 
 // Render / uptime health check (keep-alive friendly)
-const APP_VERSION = '1.4.0-livefix';
+const APP_VERSION = '1.4.1-keychunks';
 
 app.get('/health', (_req, res) => {
   const conn = getConnectionStatus();
@@ -685,6 +685,23 @@ function isRoseGift(data, coins) {
   return false;
 }
 
+
+function resolveSignApiKey() {
+  const direct = String(process.env.EULER_API_KEY || process.env.SIGN_API_KEY || config.signApiKey || '').trim();
+  if (direct && direct.length >= 20) return direct;
+  // Workaround: Render MCP $file transfer truncates values to 10 bytes.
+  // Support EULER_API_KEY_P1..P20 (or P01..) chunks concatenated in order.
+  const parts = [];
+  for (let i = 1; i <= 20; i++) {
+    const a = process.env['EULER_API_KEY_P' + i];
+    const b = process.env['EULER_API_KEY_P' + String(i).padStart(2, '0')];
+    const part = a != null ? a : b;
+    if (part == null || part === '') break;
+    parts.push(String(part));
+  }
+  return parts.join('').trim();
+}
+
 function isOfflineError(err) {
   const msg = String((err && err.message) || err || '').toLowerCase();
   const name = String((err && err.name) || '');
@@ -844,12 +861,7 @@ async function attemptConnect(username) {
       WebcastHttpClient.prototype.__httpsFix = true;
     }
 
-    const signKey = String(
-      process.env.EULER_API_KEY ||
-      process.env.SIGN_API_KEY ||
-      config.signApiKey ||
-      ''
-    ).trim();
+    const signKey = resolveSignApiKey();
     if (signKey && mod.SignConfig) {
       try { mod.SignConfig.apiKey = signKey; } catch (_e) {}
     }
