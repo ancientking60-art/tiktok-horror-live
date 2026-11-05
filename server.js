@@ -33,7 +33,7 @@ const io = new Server(server, {
 app.use(express.json());
 
 // Render / uptime health check (keep-alive friendly)
-const APP_VERSION = '1.2.0-reconnect';
+const APP_VERSION = '1.3.0-welcome';
 
 app.get('/health', (_req, res) => {
   res.status(200).json({
@@ -43,6 +43,64 @@ app.get('/health', (_req, res) => {
     connection: getConnectionStatus().state,
     username: getConnectionStatus().username || null
   });
+});
+
+
+// Proxy TikTok avatars (browser CORS often blocks them)
+app.get('/api/avatar', async (req, res) => {
+  try {
+    const raw = String(req.query.url || '').trim();
+    if (!raw) {
+      res.status(400).type('text/plain').send('missing url');
+      return;
+    }
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch (_e) {
+      res.status(400).type('text/plain').send('bad url');
+      return;
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      res.status(400).type('text/plain').send('bad protocol');
+      return;
+    }
+    const host = parsed.hostname.toLowerCase();
+    const allowed =
+      host.endsWith('tiktokcdn.com') ||
+      host.endsWith('tiktokcdn-us.com') ||
+      host.endsWith('tiktokv.com') ||
+      host.endsWith('byteoversea.com') ||
+      host.endsWith('ibyteimg.com') ||
+      host.endsWith('ttlivecdn.com') ||
+      host === 'p16-sign-va.tiktokcdn.com' ||
+      host.includes('tiktok');
+    if (!allowed) {
+      res.status(403).type('text/plain').send('host not allowed');
+      return;
+    }
+    const upstream = await fetch(parsed.toString(), {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        Referer: 'https://www.tiktok.com/'
+      },
+      redirect: 'follow'
+    });
+    if (!upstream.ok) {
+      res.status(upstream.status).type('text/plain').send('avatar fetch failed');
+      return;
+    }
+    const ctype = upstream.headers.get('content-type') || 'image/jpeg';
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader('Content-Type', ctype);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(buf);
+  } catch (err) {
+    res.status(502).type('text/plain').send('avatar proxy error');
+  }
 });
 
 app.use(express.static(path.join(ROOT, 'public')));
@@ -86,7 +144,7 @@ app.post('/api/simulate/:kind', (req, res) => {
 
   let result;
   if (kind === 'join') {
-    result = enqueueScare({ type: 'instant', reason: 'join', user, priority: 1 });
+    result = enqueueJoinSequence(user);
   } else if (kind === 'rose') {
     result = enqueueScare({
       type: 'instant',
@@ -186,6 +244,74 @@ function queueSnapshot() {
   };
 }
 
+const MAX_PENDING_WELCOMES = 3;
+
+function countPendingWelcomes() {
+  let n = 0;
+  if (playing && playing.type === 'welcome') n += 1;
+  for (const s of scareQueue) {
+    if (s.type === 'welcome') n += 1;
+  }
+  return n;
+}
+
+/** Join = instant scare, then welcome poster (if room in queue). */
+function enqueueJoinSequence(user) {
+  const instant = enqueueScare({
+    type: 'instant',
+    reason: 'join',
+    user,
+    priority: 1,
+    thenWelcome: true
+  });
+  if (instant.skipped) {
+    return instant;
+  }
+  if (countPendingWelcomes() >= MAX_PENDING_WELCOMES) {
+    return { ...instant, welcomeQueued: false, welcomeSkipped: 'welcome_cap' };
+  }
+  // Welcome is queued to run right after this join's instant (gifts can still jump ahead of pending instants)
+  const welcome = {
+    type: 'welcome',
+    reason: 'join_welcome',
+    user,
+    priority: 2
+  };
+  // Insert welcome immediately after the matching join instant if that instant is still queued;
+  // if instant already started, push welcome near front (after any buildup already prioritized).
+  if (playing && playing.type === 'instant' && playing.reason === 'join' && playing.thenWelcome) {
+    // Playing join instant now — put welcome at front of queue (before other pending instants)
+    const firstBuildup = scareQueue.findIndex((s) => s.type === 'buildup');
+    if (firstBuildup === 0) {
+      // keep buildups first
+      let i = 0;
+      while (i < scareQueue.length && scareQueue[i].type === 'buildup') i += 1;
+      scareQueue.splice(i, 0, welcome);
+    } else if (firstBuildup > 0) {
+      scareQueue.splice(0, 0, welcome);
+    } else {
+      scareQueue.unshift(welcome);
+    }
+    io.emit('queue', queueSnapshot());
+    return { ...instant, welcomeQueued: true };
+  }
+  // Instant was queued: place welcome right after the last join instant in queue
+  let lastJoinIdx = -1;
+  for (let i = scareQueue.length - 1; i >= 0; i -= 1) {
+    if (scareQueue[i].type === 'instant' && scareQueue[i].reason === 'join') {
+      lastJoinIdx = i;
+      break;
+    }
+  }
+  if (lastJoinIdx >= 0) {
+    scareQueue.splice(lastJoinIdx + 1, 0, welcome);
+  } else {
+    scareQueue.push(welcome);
+  }
+  io.emit('queue', queueSnapshot());
+  return { ...instant, welcomeQueued: true };
+}
+
 function enqueueScare(scare) {
   const now = Date.now();
 
@@ -271,14 +397,25 @@ function startScare(scare) {
     lastInstantAt = Date.now();
     if (scare.reason === 'join') lastJoinScareAt = Date.now();
   }
+  let video = null;
+  if (scare.type === 'buildup') video = '/videos/scare_buildup_20s.mp4';
+  else if (scare.type === 'instant') video = '/videos/scare_instant.mp4';
+  // welcome has no video — player renders the poster overlay
+
   const payload = {
-    type: scare.type, // 'instant' | 'buildup'
+    type: scare.type, // 'instant' | 'buildup' | 'welcome'
     reason: scare.reason,
     user: scare.user,
     giftName: scare.giftName || null,
     coins: scare.coins || null,
-    showCaption: config.showCaption,
-    video: scare.type === 'buildup' ? '/videos/scare_buildup_20s.mp4' : '/videos/scare_instant.mp4',
+    showCaption: scare.type === 'welcome' ? false : config.showCaption,
+    video,
+    avatarProxy: (() => {
+      const url = scare.user && scare.user.profilePictureUrl;
+      if (!url) return null;
+      if (String(url).startsWith('/')) return String(url);
+      return '/api/avatar?url=' + encodeURIComponent(url);
+    })(),
     startedAt: Date.now()
   };
   io.emit('scare', payload);
@@ -289,7 +426,8 @@ function startScare(scare) {
   });
   // Advance queue even if no player page is open / never sends scare_finished
   if (scareWatchdog) clearTimeout(scareWatchdog);
-  const maxMs = scare.type === 'buildup' ? 22000 : 5000;
+  const maxMs =
+    scare.type === 'buildup' ? 22000 : scare.type === 'welcome' ? 6500 : 5000;
   scareWatchdog = setTimeout(() => {
     if (playing === scare) onScareFinished();
   }, maxMs);
@@ -687,7 +825,7 @@ async function attemptConnect(username) {
 
     connection.on(WebcastEvent.MEMBER, (data) => {
       const user = normalizeUser(data.user);
-      enqueueScare({ type: 'instant', reason: 'join', user, priority: 1 });
+      enqueueJoinSequence(user);
     });
 
     connection.on(WebcastEvent.GIFT, (data) => {

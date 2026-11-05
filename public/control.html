@@ -260,7 +260,9 @@
 
     document.getElementById('simJoin').onclick = async () => {
       const data = await api('/api/simulate/join', {
-        uniqueId: 'viewer_' + Math.floor(Math.random() * 900 + 100), nickname: 'Test Joiner'
+        uniqueId: 'viewer_' + Math.floor(Math.random() * 900 + 100),
+        nickname: 'Test Joiner',
+        profilePictureUrl: '/placeholder-avatar.svg'
       });
       updateQueue(data.queue);
       log('Simulated join → ' + JSON.stringify(data));

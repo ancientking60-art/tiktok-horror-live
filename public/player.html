@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1080, height=1920, initial-scale=1" />
   <title>Horror Live Player</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Special+Elite&display=swap" rel="stylesheet" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -74,6 +77,150 @@
       font-size: 14px; letter-spacing: 0.06em; opacity: 0.55;
       text-shadow: 0 1px 6px #000; pointer-events: none;
     }
+
+    /* ---- Welcome poster ---- */
+    #welcome {
+      position: absolute; inset: 0; z-index: 6;
+      display: flex; align-items: center; justify-content: center;
+      pointer-events: none; opacity: 0;
+      background: radial-gradient(ellipse at center, rgba(0,0,0,0.15) 20%, rgba(0,0,0,0.72) 100%);
+      transition: opacity 0.55s ease;
+    }
+    #welcome.show { opacity: 1; }
+    #welcome.flicker { animation: posterFlicker 0.18s steps(2, end) 3; }
+    @keyframes posterFlicker {
+      0%, 100% { opacity: 1; filter: brightness(1); }
+      40% { opacity: 0.35; filter: brightness(2.2); }
+      70% { opacity: 0.85; filter: brightness(0.7); }
+    }
+    .poster {
+      width: min(78%, 820px);
+      aspect-ratio: 3 / 4.1;
+      position: relative;
+      transform: rotate(-1.5deg) scale(0.92);
+      opacity: 0;
+      transition: transform 0.9s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.7s ease;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,0.75));
+    }
+    #welcome.show .poster {
+      opacity: 1;
+      transform: rotate(-0.6deg) scale(1);
+    }
+    #welcome.hide .poster {
+      opacity: 0;
+      transform: rotate(1.2deg) scale(0.96) translateY(12px);
+    }
+    .poster-paper {
+      position: absolute; inset: 0;
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.08), transparent 40%),
+        linear-gradient(25deg, #c4a574 0%, #a8885a 35%, #8f7048 70%, #6e5436 100%);
+      border: 1px solid rgba(60, 40, 20, 0.55);
+      box-shadow: inset 0 0 80px rgba(40, 20, 5, 0.35);
+      clip-path: polygon(
+        1% 2%, 97% 0%, 100% 3%, 99% 96%, 97% 100%, 3% 99%, 0% 96%, 0% 4%
+      );
+    }
+    .poster-paper::before {
+      content: "";
+      position: absolute; inset: 0;
+      background:
+        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(80,50,20,0.03) 3px),
+        radial-gradient(circle at 20% 30%, rgba(40,20,10,0.18), transparent 45%),
+        radial-gradient(circle at 80% 70%, rgba(20,10,5,0.22), transparent 40%),
+        linear-gradient(135deg, transparent 40%, rgba(0,0,0,0.12) 41%, transparent 42%);
+      mix-blend-mode: multiply;
+      pointer-events: none;
+    }
+    .poster-paper::after {
+      content: "";
+      position: absolute; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
+      opacity: 0.22;
+      mix-blend-mode: overlay;
+      pointer-events: none;
+    }
+    .poster-inner {
+      position: absolute; inset: 7% 8% 8%;
+      display: flex; flex-direction: column; align-items: center;
+      text-align: center; z-index: 1;
+    }
+    .poster-title {
+      font-family: "Creepster", cursive;
+      font-size: clamp(42px, 8vw, 92px);
+      color: #2a120c;
+      letter-spacing: 0.08em;
+      text-shadow: 0 1px 0 rgba(255,230,180,0.25), 0 0 18px rgba(80,0,0,0.2);
+      margin-top: 2%;
+      line-height: 1;
+    }
+    .poster-photo-wrap {
+      margin-top: 6%;
+      width: 68%;
+      aspect-ratio: 1;
+      position: relative;
+      background: #1a120c;
+      border: 3px solid rgba(50, 30, 15, 0.65);
+      box-shadow: inset 0 0 30px rgba(0,0,0,0.55);
+      overflow: hidden;
+    }
+    .poster-photo-wrap img,
+    .poster-photo-wrap .silhouette {
+      width: 100%; height: 100%; object-fit: cover;
+      filter: grayscale(1) contrast(1.25) brightness(0.78) sepia(0.45);
+      transform: scale(1.02);
+    }
+    .poster-photo-wrap .silhouette {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 40%, #3a2a22, #120c0a 70%);
+      color: rgba(180,150,120,0.35);
+      font-size: 120px;
+    }
+    .poster-photo-wrap .grain {
+      position: absolute; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      opacity: 0.28; mix-blend-mode: soft-light; pointer-events: none;
+    }
+    .poster-name {
+      margin-top: 7%;
+      font-family: "Special Elite", "Creepster", serif;
+      font-size: clamp(26px, 4.6vw, 48px);
+      color: #24140e;
+      letter-spacing: 0.04em;
+      max-width: 92%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-shadow: 0 1px 0 rgba(255,235,200,0.2);
+    }
+    .poster-sub {
+      margin-top: 3%;
+      font-family: "Special Elite", serif;
+      font-size: clamp(14px, 2.2vw, 22px);
+      color: rgba(40, 22, 14, 0.72);
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+    }
+    .poster-stain {
+      position: absolute; width: 34%; height: 18%;
+      background: radial-gradient(ellipse, rgba(40,20,10,0.28), transparent 70%);
+      pointer-events: none; z-index: 2;
+    }
+    .poster-stain.a { top: 12%; left: -4%; transform: rotate(20deg); }
+    .poster-stain.b { bottom: 10%; right: -6%; width: 42%; }
+    .lightning-flash {
+      position: absolute; inset: 0; z-index: 7; pointer-events: none;
+      background: rgba(220, 230, 255, 0.55); opacity: 0;
+    }
+    .lightning-flash.boom {
+      animation: boom 0.35s ease-out;
+    }
+    @keyframes boom {
+      0% { opacity: 0.85; }
+      40% { opacity: 0.2; }
+      55% { opacity: 0.55; }
+      100% { opacity: 0; }
+    }
   </style>
 </head>
 <body>
@@ -81,6 +228,24 @@
     <video id="idle" src="/videos/idle_loop_60s.mp4" muted playsinline loop preload="auto"></video>
     <video id="scare" src="/videos/scare_instant.mp4" playsinline preload="auto"></video>
     <div id="vignette"></div>
+    <div id="welcome" aria-hidden="true">
+      <div class="poster">
+        <div class="poster-paper"></div>
+        <div class="poster-stain a"></div>
+        <div class="poster-stain b"></div>
+        <div class="poster-inner">
+          <div class="poster-title">WELCOME</div>
+          <div class="poster-photo-wrap">
+            <img id="welcome-avatar" alt="" hidden />
+            <div class="silhouette" id="welcome-silhouette">☠</div>
+            <div class="grain"></div>
+          </div>
+          <div class="poster-name" id="welcome-name">@viewer</div>
+          <div class="poster-sub">entered the storm</div>
+        </div>
+      </div>
+    </div>
+    <div class="lightning-flash" id="lightning"></div>
     <div id="caption">
       <img id="cap-avatar" alt="" />
       <div class="text" id="cap-text"></div>
@@ -106,6 +271,11 @@
     const capText = document.getElementById('cap-text');
     const unlock = document.getElementById('click-unlock');
     const hud = document.getElementById('hud');
+    const welcome = document.getElementById('welcome');
+    const welcomeAvatar = document.getElementById('welcome-avatar');
+    const welcomeSilhouette = document.getElementById('welcome-silhouette');
+    const welcomeName = document.getElementById('welcome-name');
+    const lightning = document.getElementById('lightning');
 
     let cfg = {
       showCaption: true, idleVolume: 0.85, scareVolume: 1.0, idleVolumeDuringScare: 0.25
@@ -113,6 +283,7 @@
     let unlocked = false;
     let scareActive = false;
     let scareEndTimer = null;
+    let audioCtx = null;
 
     ['/videos/idle_loop_60s.mp4','/videos/scare_instant.mp4','/videos/scare_buildup_20s.mp4']
       .forEach((src) => { const v = document.createElement('video'); v.preload='auto'; v.muted=true; v.src=src; v.load(); });
@@ -128,6 +299,10 @@
       unlocked = true;
       unlock.classList.add('hidden');
       idle.muted = false;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+      } catch (_e) {}
       tryPlayIdle();
     }
 
@@ -158,7 +333,7 @@
       capText.innerHTML = line;
       if (user && user.profilePictureUrl) {
         capAvatar.style.display = 'block';
-        capAvatar.src = user.profilePictureUrl;
+        capAvatar.src = '/api/avatar?url=' + encodeURIComponent(user.profilePictureUrl);
         capAvatar.onerror = () => { capAvatar.style.display = 'none'; };
       } else {
         capAvatar.style.display = 'none';
@@ -171,6 +346,75 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    function playWhisper() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const duration = 2.4;
+        const sampleRate = audioCtx.sampleRate;
+        const buffer = audioCtx.createBuffer(1, sampleRate * duration, sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) {
+          const t = i / sampleRate;
+          const env = Math.min(1, t * 2) * Math.max(0, 1 - (t / duration));
+          data[i] = (Math.random() * 2 - 1) * 0.08 * env;
+        }
+        const src = audioCtx.createBufferSource();
+        src.buffer = buffer;
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = 1200;
+        filter.Q.value = 0.7;
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0.35;
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(audioCtx.destination);
+        src.start();
+      } catch (_e) {}
+    }
+
+    function hideWelcome() {
+      welcome.classList.remove('show', 'flicker');
+      welcome.classList.add('hide');
+      setTimeout(() => welcome.classList.remove('hide'), 700);
+    }
+
+    function showWelcomePoster(payload) {
+      const user = payload.user || {};
+      const name = user.uniqueId || user.nickname || 'viewer';
+      welcomeName.textContent = '@' + name;
+
+      const proxy = payload.avatarProxy ||
+        (user.profilePictureUrl ? '/api/avatar?url=' + encodeURIComponent(user.profilePictureUrl) : null);
+
+      welcomeAvatar.hidden = true;
+      welcomeSilhouette.hidden = false;
+      if (proxy) {
+        welcomeAvatar.onload = () => {
+          welcomeAvatar.hidden = false;
+          welcomeSilhouette.hidden = true;
+        };
+        welcomeAvatar.onerror = () => {
+          welcomeAvatar.hidden = true;
+          welcomeSilhouette.hidden = false;
+        };
+        welcomeAvatar.src = proxy;
+      }
+
+      idle.volume = cfg.idleVolumeDuringScare;
+      hideCaption();
+      welcome.classList.remove('hide');
+      welcome.classList.add('show');
+      setTimeout(() => {
+        welcome.classList.add('flicker');
+        lightning.classList.remove('boom');
+        void lightning.offsetWidth;
+        lightning.classList.add('boom');
+      }, 700);
+      playWhisper();
+    }
+
     function endScare() {
       if (!scareActive) return;
       scareActive = false;
@@ -178,14 +422,13 @@
       scare.classList.remove('visible');
       try { scare.pause(); } catch (_e) {}
       hideCaption();
+      hideWelcome();
       idle.volume = cfg.idleVolume;
       tryPlayIdle();
       if (socket && socket.connected) socket.emit('scare_finished');
     }
 
-    function playScare(payload) {
-      if (scareActive) endScare();
-      scareActive = true;
+    function playVideoScare(payload) {
       const src = payload.video || '/videos/scare_instant.mp4';
       const abs = new URL(src, location.origin).pathname;
       const current = scare.getAttribute('data-src') || '';
@@ -198,7 +441,7 @@
       scare.volume = cfg.scareVolume;
       scare.muted = false;
       idle.volume = cfg.idleVolumeDuringScare;
-      showCaption(payload.user, payload.reason);
+      if (payload.reason !== 'join_welcome') showCaption(payload.user, payload.reason);
 
       const start = () => {
         scare.classList.add('visible');
@@ -216,6 +459,23 @@
         scare.addEventListener('canplay', onReady);
         setTimeout(() => { scare.removeEventListener('canplay', onReady); if (scareActive) start(); }, 1500);
       }
+    }
+
+    function playScare(payload) {
+      if (scareActive) endScare();
+      scareActive = true;
+      hideWelcome();
+
+      if (payload.type === 'welcome') {
+        try { scare.pause(); } catch (_e) {}
+        scare.classList.remove('visible');
+        showWelcomePoster(payload);
+        if (scareEndTimer) clearTimeout(scareEndTimer);
+        scareEndTimer = setTimeout(() => { if (scareActive) endScare(); }, 4800);
+        return;
+      }
+
+      playVideoScare(payload);
       const expectedMs = payload.type === 'buildup' ? 20500 : 3800;
       if (scareEndTimer) clearTimeout(scareEndTimer);
       scareEndTimer = setTimeout(() => { if (scareActive) endScare(); }, expectedMs + 800);
@@ -227,7 +487,6 @@
     idle.addEventListener('pause', () => { if (!document.hidden) tryPlayIdle(); });
 
     function setHud(conn) {
-      // Keep viewer-facing UI clean: tiny LIVE mark only when connected; never show errors.
       if (conn && conn.state === 'connected' && conn.username) {
         hud.textContent = 'LIVE';
       } else {
@@ -240,7 +499,6 @@
       if (urlUser) {
         socket.emit('connect_tiktok', { username: urlUser }, (res) => {
           if (res && res.connection) setHud(res.connection);
-          /* offline/retry is normal — no viewer-facing errors */
         });
       }
     });
